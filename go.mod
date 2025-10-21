@@ -1,4 +1,4 @@
-module zap-logger-filter
+module github.com/november4bin/zap-logger-filter
 
 go 1.25
 
