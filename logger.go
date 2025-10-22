@@ -3,7 +3,6 @@ package zaploggerfilter
 import (
 	"os"
 	"sync"
-	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -17,117 +16,115 @@ const (
 	File    ZapCoreType = "file"
 )
 
-// Config 配置
 type Config struct {
-	// 类型
-	Type ZapCoreType
-	// 名称
-	// 用于指定日志记录器输出日志
-	Name string
-	// 日志级别
-	Level string
-	// 是否启动过滤
+	Type            ZapCoreType
+	Name            string
+	Level           string
 	SensitiveFilter bool
-	// 过滤字段
 	SensitiveFields []string
-	// 日志文件存储路径
-	Path string
-	// 单个日志文件最大尺寸
-	MaxSize int
-	// 最大时间
-	MaxAge int
-	// 最多保留个数
-	MaxBackups int
-	// 是否压缩
-	Compress bool
+	Path            string
+	MaxSize         int
+	MaxAge          int
+	MaxBackups      int
+	Compress        bool
 }
 
 var (
 	// L 全局日志记录器
 	L *zap.Logger
-	// 日志记录器列表
+	// l 日志记录器映射
 	l sync.Map
-	// encoder 默认编码器
+	// encoderConfig 日志编码器配置
 	encoderConfig = zapcore.EncoderConfig{
-		TimeKey:       "time",
-		LevelKey:      "level",
-		NameKey:       "logger",
-		CallerKey:     "caller",
-		MessageKey:    "msg",
-		StacktraceKey: "stacktrace",
-		LineEnding:    zapcore.DefaultLineEnding,
-		EncodeLevel:   zapcore.LowercaseLevelEncoder,
-		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(t.Format(time.RFC3339))
-		},
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "logger",
+		CallerKey:      "caller",
+		MessageKey:     "msg",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeTime:     zapcore.RFC3339TimeEncoder,
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
-	once sync.Once
+	defaultLogLevel = zapcore.DebugLevel
+	defaultLogName  = "default"
+	once            sync.Once
 )
 
-// Init 初始化
+// Init 初始化日志记录器
 func Init(cfg []Config) {
 	once.Do(func() {
-		cores := make([]zapcore.Core, 0, len(cfg))
+		// 创建默认日志记录器核心
+		defaultLogCore := zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), defaultLogLevel)
+		defaultLog := newLogger(defaultLogCore)
+		l.Store(defaultLogName, defaultLog)
 
 		if len(cfg) > 0 {
+			// 创建日志记录器核心
+			cores := make([]zapcore.Core, 0, len(cfg))
 			for _, c := range cfg {
 				core := newCore(c)
 				cores = append(cores, core)
 				l.Store(c.Name, newLogger(core))
 			}
-		} else {
-			cores = append(cores, zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), zapcore.DebugLevel))
-		}
 
-		L = newLogger(zapcore.NewTee(cores...))
+			L = newLogger(zapcore.NewTee(cores...))
+		} else {
+			// 如果没有配置日志记录器，默认使用控制台记录器
+			L = defaultLog
+		}
 
 	})
 }
 
+// newCore 创建日志记录器核心
+// 如果日志记录器类型无效，会触发panic
 func newCore(cfg Config) zapcore.Core {
 	var encoder zapcore.Encoder
-	switch cfg.Type {
-	case Console:
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	case File:
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	default:
-		panic("unknown zap core type: " + cfg.Type)
-	}
 
+	// 根据配置创建日志编码器
 	if cfg.SensitiveFilter {
+		// 开启敏感数据过滤，使用敏感数据过滤编码器
 		encoder = &SensitiveDataEncoder{
 			Encoder: encoder,
 			Filter:  NewSensitiveDataFilter(cfg.SensitiveFields),
 		}
+	} else {
+		// 未开启敏感数据过滤，根据日志记录器类型创建编码器
+		switch cfg.Type {
+		case File:
+			encoder = zapcore.NewJSONEncoder(encoderConfig)
+		case Console:
+			encoder = zapcore.NewConsoleEncoder(encoderConfig)
+		default:
+			panic("unknown zap core type: " + cfg.Type)
+		}
 	}
 
-	var w zapcore.WriteSyncer
-	var core zapcore.Core
 	switch cfg.Type {
 	case Console:
-		w = zapcore.AddSync(os.Stdout)
-		core = zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), getLoggerLevel(cfg.Level))
+		return zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), getLoggerLevel(cfg.Level))
 	case File:
-		w = zapcore.AddSync(&lumberjack.Logger{
-			Filename:   cfg.Path,
-			MaxSize:    cfg.MaxSize,
-			MaxBackups: cfg.MaxBackups,
-			MaxAge:     cfg.MaxAge,
-			Compress:   cfg.Compress,
-		})
+		return zapcore.NewCore(
+			encoder,
+			zapcore.AddSync(&lumberjack.Logger{
+				Filename:   cfg.Path,
+				MaxSize:    cfg.MaxSize,
+				MaxBackups: cfg.MaxBackups,
+				MaxAge:     cfg.MaxAge,
+				Compress:   cfg.Compress,
+			}),
+			getLoggerLevel(cfg.Level),
+		)
+	default:
+		return nil
 	}
-
-	core = zapcore.NewCore(
-		encoder,
-		w,
-		getLoggerLevel(cfg.Level),
-	)
-	return core
 }
 
+// getLoggerLevel 获取日志级别
+// 如果配置的日志级别无效，会触发panic
 func getLoggerLevel(level string) zapcore.Level {
 	switch level {
 	case "debug":
@@ -147,40 +144,57 @@ func getLoggerLevel(level string) zapcore.Level {
 	}
 }
 
+// newLogger 创建日志记录器
 func newLogger(core zapcore.Core, options ...zap.Option) *zap.Logger {
 	options = append(options, zap.AddCaller())
 	return zap.New(core, options...)
 }
 
-func AddTagetLogger(c Config) {
+// AddTargetLogger 添加目标日志记录器
+func AddTargetLogger(c Config) {
 	core := newCore(c)
 
 	l.Store(c.Name, newLogger(core))
 }
 
-func DebugTo(taget string, msg string, fields ...zapcore.Field) {
-	LogTo(taget, zapcore.DebugLevel, msg, fields...)
+// GetTargetLogger 获取目标日志记录器
+func GetTargetLogger(target string) (*zap.Logger, bool) {
+	lg, ok := l.Load(target)
+	if ok {
+		return lg.(*zap.Logger), true
+	}
+	return nil, false
 }
 
-func InfoTo(taget string, msg string, fields ...zapcore.Field) {
-	LogTo(taget, zapcore.InfoLevel, msg, fields...)
+// DebugTo 向指定目标记录调试级别的日志
+func DebugTo(target string, msg string, fields ...zapcore.Field) {
+	LogTo(target, zapcore.DebugLevel, msg, fields...)
 }
 
-func WarnTo(taget string, msg string, fields ...zapcore.Field) {
-	LogTo(taget, zapcore.WarnLevel, msg, fields...)
+// InfoTo 向指定目标记录信息级别的日志
+func InfoTo(target string, msg string, fields ...zapcore.Field) {
+	LogTo(target, zapcore.InfoLevel, msg, fields...)
 }
 
-func ErrorTo(taget string, msg string, fields ...zapcore.Field) {
-	LogTo(taget, zapcore.ErrorLevel, msg, fields...)
+// WarnTo 向指定目标记录警告级别的日志
+func WarnTo(target string, msg string, fields ...zapcore.Field) {
+	LogTo(target, zapcore.WarnLevel, msg, fields...)
 }
 
-func LogTo(taget string, lvl zapcore.Level, msg string, fields ...zapcore.Field) {
-	v, ok := l.Load(taget)
+// ErrorTo 向指定目标记录错误级别的日志
+func ErrorTo(target string, msg string, fields ...zapcore.Field) {
+	LogTo(target, zapcore.ErrorLevel, msg, fields...)
+}
+
+// LogTo 向指定目标记录日志
+func LogTo(target string, lvl zapcore.Level, msg string, fields ...zapcore.Field) {
+	v, ok := l.Load(target)
 	if ok {
 		v.(*zap.Logger).Log(lvl, msg, fields...)
 	}
 }
 
+// Sync 同步日志记录器
 func Sync() {
 	_ = L.Sync()
 
