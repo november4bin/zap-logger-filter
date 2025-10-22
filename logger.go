@@ -48,7 +48,7 @@ var (
 	// 日志记录器列表
 	l sync.Map
 	// encoder 默认编码器
-	encoder = zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+	encoderConfig = zapcore.EncoderConfig{
 		TimeKey:       "time",
 		LevelKey:      "level",
 		NameKey:       "logger",
@@ -62,7 +62,7 @@ var (
 		},
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
-	})
+	}
 	once sync.Once
 )
 
@@ -78,7 +78,7 @@ func Init(cfg []Config) {
 				l.Store(c.Name, newLogger(core))
 			}
 		} else {
-			cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zapcore.DebugLevel))
+			cores = append(cores, zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), zapcore.DebugLevel))
 		}
 
 		L = newLogger(zapcore.NewTee(cores...))
@@ -87,14 +87,21 @@ func Init(cfg []Config) {
 }
 
 func newCore(cfg Config) zapcore.Core {
-	var enc zapcore.Encoder
+	var encoder zapcore.Encoder
+	switch cfg.Type {
+	case Console:
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	case File:
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	default:
+		panic("unknown zap core type: " + cfg.Type)
+	}
+
 	if cfg.SensitiveFilter {
-		enc = &SensitiveDataEncoder{
+		encoder = &SensitiveDataEncoder{
 			Encoder: encoder,
 			Filter:  NewSensitiveDataFilter(cfg.SensitiveFields),
 		}
-	} else {
-		enc = encoder
 	}
 
 	var w zapcore.WriteSyncer
@@ -114,7 +121,7 @@ func newCore(cfg Config) zapcore.Core {
 	}
 
 	core = zapcore.NewCore(
-		enc,
+		encoder,
 		w,
 		getLoggerLevel(cfg.Level),
 	)
