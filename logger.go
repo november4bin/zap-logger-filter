@@ -84,22 +84,22 @@ func Init(cfg []Config) {
 func newCore(cfg Config) zapcore.Core {
 	var encoder zapcore.Encoder
 
+	// 未开启敏感数据过滤，根据日志记录器类型创建编码器
+	switch cfg.Type {
+	case File:
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	case Console:
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	default:
+		panic("unknown zap core type: " + cfg.Type)
+	}
+
 	// 根据配置创建日志编码器
 	if cfg.SensitiveFilter {
 		// 开启敏感数据过滤，使用敏感数据过滤编码器
 		encoder = &SensitiveDataEncoder{
 			Encoder: encoder,
 			Filter:  NewSensitiveDataFilter(cfg.SensitiveFields),
-		}
-	} else {
-		// 未开启敏感数据过滤，根据日志记录器类型创建编码器
-		switch cfg.Type {
-		case File:
-			encoder = zapcore.NewJSONEncoder(encoderConfig)
-		case Console:
-			encoder = zapcore.NewConsoleEncoder(encoderConfig)
-		default:
-			panic("unknown zap core type: " + cfg.Type)
 		}
 	}
 
