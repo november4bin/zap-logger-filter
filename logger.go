@@ -48,8 +48,8 @@ var (
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
-	defaultLogLevel = zapcore.DebugLevel
-	defaultLogName  = "default"
+	DefaultLogLevel = zapcore.DebugLevel
+	DefaultLogName  = "default"
 	once            sync.Once
 )
 
@@ -57,9 +57,9 @@ var (
 func Init(cfg []Config) {
 	once.Do(func() {
 		// 创建默认日志记录器核心
-		defaultLogCore := zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), defaultLogLevel)
+		defaultLogCore := zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(os.Stdout), DefaultLogLevel)
 		defaultLog := newLogger(defaultLogCore)
-		l.Store(defaultLogName, defaultLog)
+		l.Store(DefaultLogName, defaultLog)
 
 		if len(cfg) > 0 {
 			// 创建日志记录器核心
